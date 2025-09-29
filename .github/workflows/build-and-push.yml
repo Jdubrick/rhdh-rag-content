@@ -1,0 +1,81 @@
+name: Build and Push RAG Container
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "The version of RHDH documentation you want to build for. E.g. ('1.7')."
+        required: true
+      compute_flavor:
+        description: "The compute flavor for the container build."
+        required: false
+        default: "cpu"
+        type: choice
+        options:
+          - cpu
+          - gpu
+
+env:
+  IMAGE_NAME: rag-content
+  IMAGE_REGISTRY: quay.io
+  REGISTRY_ORG: redhat-ai-dev
+  LATEST_TAG: release-${{ inputs.version }}-lcs
+  CONTAINER_FILE: Containerfile.rhdh_lightspeed
+
+jobs:
+  build-and-push-dev:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Required for image pushing to a registry
+      packages: write
+    steps:
+      - name: Free Disk Space
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be #v1.3.1
+        with:
+            tool-cache: false
+            android: true
+            dotnet: true
+            haskell: true
+            large-packages: true
+            docker-images: true
+            swap-storage: true
+      - name: Install buildah
+        run: |
+          sudo apt update
+          # qemu is required for arm64 builds
+          sudo apt install -y buildah qemu-user-static
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Build image with Buildah
+        id: build_image
+        uses: redhat-actions/buildah-build@v2
+        with:
+          image: ${{ env.IMAGE_NAME }}
+          tags: |
+            ${{ env.LATEST_TAG }}
+            "${{ env.LATEST_TAG }}-${{ github.sha }}"
+          containerfiles: |
+            ${{ env.CONTAINER_FILE }}
+          archs: amd64, arm64
+          oci: true
+          build-args: |
+            RHDH_DOCS_VERSION=${{ inputs.version }}
+            FLAVOR=${{ inputs.compute_flavor }}
+      - name: Check images
+        run: |
+          buildah images | grep '${{ env.IMAGE_NAME }}'
+          echo '${{ steps.build_image.outputs.image }}'
+          echo '${{ steps.build_image.outputs.tags }}'
+      - name: Check manifest
+        run: |
+          set -x
+          buildah manifest inspect ${{ steps.build_image.outputs.image }}:${{ env.LATEST_TAG }}
+      - name: Push image to Quay.io
+        uses: redhat-actions/push-to-registry@v2
+        with:
+          image: ${{ steps.build_image.outputs.image }}
+          tags: ${{ steps.build_image.outputs.tags }}
+          registry: ${{ env.IMAGE_REGISTRY }}/${{ env.REGISTRY_ORG }}
+          username: ${{ secrets.QUAY_REGISTRY_USERNAME }}
+          password: ${{ secrets.QUAY_REGISTRY_PASSWORD }}
