@@ -33,22 +33,7 @@ COPY scripts/ .
 RUN sed -i 's/scripts\///' get_rhdh_plaintext_docs.sh
 RUN ./get_rhdh_plaintext_docs.sh $RHDH_DOCS_VERSION
 
-RUN set -e && for RHDH_VERSION in $(ls -1 rhdh-product-docs-plaintext); do \
-        python ./generate_embeddings_rhdh.py \
-            -f rhdh-product-docs-plaintext/${RHDH_VERSION} \
-            -md embeddings_model \
-            -mn ${EMBEDDING_MODEL} \
-            -o vector_db/rhdh_product_docs/${RHDH_VERSION} \
-            -w ${NUM_WORKERS} \
-            -i rhdh-product-docs-$(echo $RHDH_VERSION | sed 's/\./_/g') \
-            -t rhdh-docs-topic-map/rhdh_topic_map.yaml \
-            --vector-store-type=llamastack-faiss \
-            -v ${RHDH_VERSION}; \
-    done
-
 FROM registry.access.redhat.com/ubi9/python-312-minimal:9.7@sha256:2ac60c655288a88ec55df5e2154b9654629491e3c58b5c54450fb3d27a575cb6
-COPY --from=lightspeed-core-rag-builder /rag-content/vector_db/rhdh_product_docs /rag/vector_db/rhdh_product_docs
-COPY --from=lightspeed-core-rag-builder /rag-content/embeddings_model /rag/embeddings_model
 COPY --from=lightspeed-core-rag-builder /rag-content/rhdh-product-docs-plaintext/1.8/titles /product_docs
 COPY --from=lightspeed-core-rag-builder /rag-content/rag-file-upload.py /rag-file-upload.py
 

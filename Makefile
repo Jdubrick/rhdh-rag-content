@@ -28,7 +28,7 @@ $(error Unsupported FLAVOR $(FLAVOR), must be 'cpu' or 'gpu')
 endif
 
 build-image-rhdh-example: ## Build a rag-content container image for RHDH
-	podman build --platform linux/amd64 -t rhdh-rag-content -f Containerfile.rhdh_lightspeed --build-arg FLAVOR=$(TORCH_GROUP) .
+	podman build --platform linux/arm64 -t rhdh-rag-content -f Containerfile.rhdh_lightspeed --build-arg FLAVOR=$(TORCH_GROUP) .
 
 help: ## Show this help screen
 	@echo 'Usage: make <OPTIONS> ... <TARGETS>'
