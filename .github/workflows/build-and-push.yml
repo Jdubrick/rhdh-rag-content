@@ -38,7 +38,7 @@ on:
 env:
   IMAGE_NAME: rag-content
   IMAGE_REGISTRY: quay.io
-  REGISTRY_ORG: redhat-ai-dev
+  REGISTRY_ORG: rh-ee-jdubrick
   CONTAINER_FILE: Containerfile.rhdh_lightspeed
 
 jobs:
