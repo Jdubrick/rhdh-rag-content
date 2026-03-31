@@ -85,7 +85,7 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - name: Create vector store and embedding model
         run: |
-          docker build -t rag-content-builder:latest -f Containerfile.vs
+          docker build -t rag-content-builder:latest -f Containerfile.vs .
       - name: Write vector store and embedding model
         run: |
           docker run --rm \
