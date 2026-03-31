@@ -102,12 +102,12 @@ jobs:
             BASE_IMAGE=${{ needs.setup.outputs.base_image }}
       - name: Write vector store and embedding model
         run: |
-          buildah create --name tmp rag-content-builder:latest true
+          docker create --name tmp rag-content-builder:latest true
 
-          buildah cp tmp:/rag-content/vector_db ./vector_db
-          buildah cp tmp:/rag-content/embeddings_model ./embeddings_model
+          docker cp tmp:/rag-content/vector_db ./vector_db
+          docker cp tmp:/rag-content/embeddings_model ./embeddings_model
 
-          buildah rm tmp
+          docker rm tmp
       - uses: actions/upload-artifact@v4 #TODO: pin this
         with:
           name: rag-content
