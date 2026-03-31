@@ -81,106 +81,120 @@ jobs:
     permissions:
       contents: read
     steps:
+      - name: Install buildah
+        run: |
+          sudo apt update
+          sudo apt install -y buildah
       - name: Checkout code
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - name: Create vector store and embedding model
-        run: |
-          docker build -t rag-content-builder:latest -f Containerfile.vs .
+        id: build_image
+        uses: redhat-actions/buildah-build@7a95fa7ee0f02d552a32753e7414641a04307056 # v2.13
+        with:
+          layers: true
+          image: rag-content-builder
+          tags: latest
+          containerfiles: Containerfile.vs
+          archs: amd64
+          oci: true
+          build-args: |
+            RHDH_DOCS_VERSION=${{ inputs.version }}
+            BASE_IMAGE=${{ needs.setup.outputs.base_image }}
       - name: Write vector store and embedding model
         run: |
-          docker create --name tmp rag-content-builder:latest true
+          buildah create --name tmp rag-content-builder:latest true
 
-          docker cp tmp:/rag-content/vector_db ./vector_db
-          docker cp tmp:/rag-content/embeddings_model ./embeddings_model
+          buildah cp tmp:/rag-content/vector_db ./vector_db
+          buildah cp tmp:/rag-content/embeddings_model ./embeddings_model
 
-          docker rm tmp
+          buildah rm tmp
       - uses: actions/upload-artifact@v4 #TODO: pin this
         with:
           name: rag-content
           path: |
             vector_db/
             embeddings_model/
-  # build:
-  #   needs: setup
-  #   strategy:
-  #     matrix:
-  #       include:
-  #         - arch: amd64
-  #           runner: ubuntu-24.04
-  #         - arch: arm64
-  #           runner: ubuntu-24.04-arm
-  #   runs-on: ${{ matrix.runner }}
-  #   timeout-minutes: 35
-  #   permissions:
-  #     contents: read
-  #   steps:
-  #     - name: Set tag from setup
-  #       run: |
-  #         echo "LATEST_TAG=${{ needs.setup.outputs.latest_tag }}" >> $GITHUB_ENV
-  #     - name: Install buildah
-  #       run: |
-  #         sudo apt update
-  #         sudo apt install -y buildah
-  #     - name: Checkout code
-  #       uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+  build:
+    needs: [setup, vector-store-artifact]
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 35
+    permissions:
+      contents: read
+    steps:
+      - name: Set tag from setup
+        run: |
+          echo "LATEST_TAG=${{ needs.setup.outputs.latest_tag }}" >> $GITHUB_ENV
+      - name: Install buildah
+        run: |
+          sudo apt update
+          sudo apt install -y buildah
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
   
-  #     - name: Build image with Buildah
-  #       id: build_image
-  #       uses: redhat-actions/buildah-build@7a95fa7ee0f02d552a32753e7414641a04307056 # v2.13
-  #       with:
-  #         layers: true
-  #         image: ${{ env.IMAGE_NAME }}
-  #         tags: |
-  #           ${{ env.LATEST_TAG }}-${{ matrix.arch }}-${{ github.sha }}
-  #         containerfiles: |
-  #           ${{ env.CONTAINER_FILE }}
-  #         archs: ${{ matrix.arch }}
-  #         oci: true
-  #         build-args: |
-  #           RHDH_DOCS_VERSION=${{ inputs.version }}
-  #           BASE_IMAGE=${{ needs.setup.outputs.base_image }}
-  #     - name: Check images
-  #       run: |
-  #         buildah images | grep '${{ env.IMAGE_NAME }}'
-  #         echo '${{ steps.build_image.outputs.image }}'
-  #         echo '${{ steps.build_image.outputs.tags }}'
-  #     - name: Push architecture-specific image to Quay.io
-  #       uses: redhat-actions/push-to-registry@5ed88d269cf581ea9ef6dd6806d01562096bee9c # v2.8
-  #       with:
-  #         image: ${{ steps.build_image.outputs.image }}
-  #         tags: ${{ steps.build_image.outputs.tags }}
-  #         registry: ${{ env.IMAGE_REGISTRY }}/${{ env.REGISTRY_ORG }}
-  #         username: ${{ secrets.QUAY_REGISTRY_USERNAME }}
-  #         password: ${{ secrets.QUAY_REGISTRY_PASSWORD }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: rag-content
+          path: .
+      - name: Build image with Buildah
+        id: build_image
+        uses: redhat-actions/buildah-build@7a95fa7ee0f02d552a32753e7414641a04307056 # v2.13
+        with:
+          layers: true
+          image: ${{ env.IMAGE_NAME }}
+          tags: |
+            ${{ env.LATEST_TAG }}-${{ matrix.arch }}-${{ github.sha }}
+          containerfiles: Containerfile.minimal
+          archs: ${{ matrix.arch }}
+          oci: true
+      - name: Check images
+        run: |
+          buildah images | grep '${{ env.IMAGE_NAME }}'
+          echo '${{ steps.build_image.outputs.image }}'
+          echo '${{ steps.build_image.outputs.tags }}'
+      - name: Push architecture-specific image to Quay.io
+        uses: redhat-actions/push-to-registry@5ed88d269cf581ea9ef6dd6806d01562096bee9c # v2.8
+        with:
+          image: ${{ steps.build_image.outputs.image }}
+          tags: ${{ steps.build_image.outputs.tags }}
+          registry: ${{ env.IMAGE_REGISTRY }}/${{ env.REGISTRY_ORG }}
+          username: ${{ secrets.QUAY_REGISTRY_USERNAME }}
+          password: ${{ secrets.QUAY_REGISTRY_PASSWORD }}
 
-  # create-manifest:
-  #   needs: [build, setup]
-  #   runs-on: ubuntu-24.04
-  #   timeout-minutes: 15
-  #   permissions:
-  #     contents: read
-  #   steps:
-  #     - name: Set tag from setup
-  #       run: |
-  #         echo "LATEST_TAG=${{ needs.setup.outputs.latest_tag }}" >> $GITHUB_ENV
-  #     - name: Install buildah
-  #       run: |
-  #         sudo apt update
-  #         sudo apt install -y buildah
-  #     - name: Login to registry
-  #       run: |
-  #         echo "${{ secrets.QUAY_REGISTRY_PASSWORD }}" | buildah login --username "${{ secrets.QUAY_REGISTRY_USERNAME }}" --password-stdin ${{ env.IMAGE_REGISTRY }}
-  #     - name: Create and push manifest
-  #       run: |
-  #         # Create manifests
-  #         buildah manifest create ${{ env.IMAGE_NAME }}:${{ env.LATEST_TAG }}
-  #         buildah manifest add ${{ env.IMAGE_NAME }}:${{ env.LATEST_TAG }} ${{ env.IMAGE_REGISTRY }}/${{ env.REGISTRY_ORG }}/${{ env.IMAGE_NAME }}:${{ env.LATEST_TAG }}-amd64-${{ github.sha }}
-  #         buildah manifest add ${{ env.IMAGE_NAME }}:${{ env.LATEST_TAG }} ${{ env.IMAGE_REGISTRY }}/${{ env.REGISTRY_ORG }}/${{ env.IMAGE_NAME }}:${{ env.LATEST_TAG }}-arm64-${{ github.sha }}
+  create-manifest:
+    needs: [build, setup]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Set tag from setup
+        run: |
+          echo "LATEST_TAG=${{ needs.setup.outputs.latest_tag }}" >> $GITHUB_ENV
+      - name: Install buildah
+        run: |
+          sudo apt update
+          sudo apt install -y buildah
+      - name: Login to registry
+        run: |
+          echo "${{ secrets.QUAY_REGISTRY_PASSWORD }}" | buildah login --username "${{ secrets.QUAY_REGISTRY_USERNAME }}" --password-stdin ${{ env.IMAGE_REGISTRY }}
+      - name: Create and push manifest
+        run: |
+          # Create manifests
+          buildah manifest create ${{ env.IMAGE_NAME }}:${{ env.LATEST_TAG }}
+          buildah manifest add ${{ env.IMAGE_NAME }}:${{ env.LATEST_TAG }} ${{ env.IMAGE_REGISTRY }}/${{ env.REGISTRY_ORG }}/${{ env.IMAGE_NAME }}:${{ env.LATEST_TAG }}-amd64-${{ github.sha }}
+          buildah manifest add ${{ env.IMAGE_NAME }}:${{ env.LATEST_TAG }} ${{ env.IMAGE_REGISTRY }}/${{ env.REGISTRY_ORG }}/${{ env.IMAGE_NAME }}:${{ env.LATEST_TAG }}-arm64-${{ github.sha }}
           
-  #         buildah manifest create ${{ env.IMAGE_NAME }}:${{ env.LATEST_TAG }}-${{ github.sha }}
-  #         buildah manifest add ${{ env.IMAGE_NAME }}:${{ env.LATEST_TAG }}-${{ github.sha }} ${{ env.IMAGE_REGISTRY }}/${{ env.REGISTRY_ORG }}/${{ env.IMAGE_NAME }}:${{ env.LATEST_TAG }}-amd64-${{ github.sha }}
-  #         buildah manifest add ${{ env.IMAGE_NAME }}:${{ env.LATEST_TAG }}-${{ github.sha }} ${{ env.IMAGE_REGISTRY }}/${{ env.REGISTRY_ORG }}/${{ env.IMAGE_NAME }}:${{ env.LATEST_TAG }}-arm64-${{ github.sha }}
+          buildah manifest create ${{ env.IMAGE_NAME }}:${{ env.LATEST_TAG }}-${{ github.sha }}
+          buildah manifest add ${{ env.IMAGE_NAME }}:${{ env.LATEST_TAG }}-${{ github.sha }} ${{ env.IMAGE_REGISTRY }}/${{ env.REGISTRY_ORG }}/${{ env.IMAGE_NAME }}:${{ env.LATEST_TAG }}-amd64-${{ github.sha }}
+          buildah manifest add ${{ env.IMAGE_NAME }}:${{ env.LATEST_TAG }}-${{ github.sha }} ${{ env.IMAGE_REGISTRY }}/${{ env.REGISTRY_ORG }}/${{ env.IMAGE_NAME }}:${{ env.LATEST_TAG }}-arm64-${{ github.sha }}
           
-  #         # Push manifests
-  #         buildah manifest push --all ${{ env.IMAGE_NAME }}:${{ env.LATEST_TAG }} docker://${{ env.IMAGE_REGISTRY }}/${{ env.REGISTRY_ORG }}/${{ env.IMAGE_NAME }}:${{ env.LATEST_TAG }}
-  #         buildah manifest push --all ${{ env.IMAGE_NAME }}:${{ env.LATEST_TAG }}-${{ github.sha }} docker://${{ env.IMAGE_REGISTRY }}/${{ env.REGISTRY_ORG }}/${{ env.IMAGE_NAME }}:${{ env.LATEST_TAG }}-${{ github.sha }}
+          # Push manifests
+          buildah manifest push --all ${{ env.IMAGE_NAME }}:${{ env.LATEST_TAG }} docker://${{ env.IMAGE_REGISTRY }}/${{ env.REGISTRY_ORG }}/${{ env.IMAGE_NAME }}:${{ env.LATEST_TAG }}
+          buildah manifest push --all ${{ env.IMAGE_NAME }}:${{ env.LATEST_TAG }}-${{ github.sha }} docker://${{ env.IMAGE_REGISTRY }}/${{ env.REGISTRY_ORG }}/${{ env.IMAGE_NAME }}:${{ env.LATEST_TAG }}-${{ github.sha }}
