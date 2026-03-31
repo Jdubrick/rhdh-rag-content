@@ -100,14 +100,17 @@ jobs:
           build-args: |
             RHDH_DOCS_VERSION=${{ inputs.version }}
             BASE_IMAGE=${{ needs.setup.outputs.base_image }}
-      - name: Write vector store and embedding model
+      - name: Extract vector store and embedding model
         run: |
-          docker create --name tmp rag-content-builder:latest true
-
-          docker cp tmp:/rag-content/vector_db ./vector_db
-          docker cp tmp:/rag-content/embeddings_model ./embeddings_model
-
-          docker rm tmp
+          ctr=$(buildah from localhost/rag-content-builder:latest)
+          mnt=$(buildah mount $ctr)
+          
+          mkdir -p vector_db embeddings_model
+          cp -r $mnt/rag-content/vector_db/. ./vector_db
+          cp -r $mnt/rag-content/embeddings_model/. ./embeddings_model
+      
+          buildah unmount $ctr
+          buildah rm $ctr
       - uses: actions/upload-artifact@v4 #TODO: pin this
         with:
           name: rag-content
