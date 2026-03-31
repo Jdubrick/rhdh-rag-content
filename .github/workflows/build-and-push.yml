@@ -102,15 +102,19 @@ jobs:
             BASE_IMAGE=${{ needs.setup.outputs.base_image }}
       - name: Extract vector store and embedding model
         run: |
-          ctr=$(buildah from localhost/rag-content-builder:latest)
-          mnt=$(buildah mount $ctr)
-          
-          mkdir -p vector_db embeddings_model
-          cp -r $mnt/rag-content/vector_db/. ./vector_db
-          cp -r $mnt/rag-content/embeddings_model/. ./embeddings_model
+          buildah unshare -- bash -c '
+            ctr=$(buildah from localhost/rag-content-builder:latest)
+            mnt=$(buildah mount $ctr)
       
-          buildah unmount $ctr
-          buildah rm $ctr
+            rm -rf vector_db embeddings_model
+            mkdir -p vector_db embeddings_model
+      
+            cp -r $mnt/rag-content/vector_db/. ./vector_db
+            cp -r $mnt/rag-content/embeddings_model/. ./embeddings_model
+      
+            buildah unmount $ctr
+            buildah rm $ctr
+          '
       - uses: actions/upload-artifact@v4 #TODO: pin this
         with:
           name: rag-content
