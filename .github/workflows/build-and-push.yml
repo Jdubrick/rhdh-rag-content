@@ -88,10 +88,12 @@ jobs:
           docker build -t rag-content-builder:latest -f Containerfile.vs .
       - name: Write vector store and embedding model
         run: |
-          docker run --rm \
-          -v $(pwd)/vector_db:/rag-content/vector_db \
-          -v $(pwd)/embeddings_model:/rag-content/embeddings_model \
-          rag-content-builder
+          docker create --name tmp rag-content-builder:latest
+
+          docker cp tmp:/rag-content/vector_db ./vector_db
+          docker cp tmp:/rag-content/embeddings_model ./embeddings_model
+
+          docker rm tmp
       - uses: actions/upload-artifact@v4 #TODO: pin this
         with:
           name: rag-content

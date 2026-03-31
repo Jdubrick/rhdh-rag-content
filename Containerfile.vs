@@ -28,7 +28,7 @@ COPY scripts/ .
 RUN sed -i 's/scripts\///' get_rhdh_plaintext_docs.sh
 RUN ./get_rhdh_plaintext_docs.sh $RHDH_DOCS_VERSION
 
-CMD set -e && for RHDH_VERSION in $(ls -1 rhdh-product-docs-plaintext); do \
+RUN set -e && for RHDH_VERSION in $(ls -1 rhdh-product-docs-plaintext); do \
         python ./generate_embeddings_rhdh.py \
             -f rhdh-product-docs-plaintext/${RHDH_VERSION} \
             -md embeddings_model \
