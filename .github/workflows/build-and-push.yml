@@ -88,7 +88,7 @@ jobs:
           docker build -t rag-content-builder:latest -f Containerfile.vs .
       - name: Write vector store and embedding model
         run: |
-          docker create --name tmp rag-content-builder:latest
+          docker create --name tmp rag-content-builder:latest true
 
           docker cp tmp:/rag-content/vector_db ./vector_db
           docker cp tmp:/rag-content/embeddings_model ./embeddings_model
