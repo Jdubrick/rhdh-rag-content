@@ -82,17 +82,19 @@ jobs:
             BASE_IMAGE=${{ needs.setup.outputs.base_image }}
       - name: Extract vector DB from built image
         run: |
-          set -euo pipefail
+          buildah unshare -- bash -c '
+            set -euo pipefail
 
-          IMAGE_REF="${{ env.LOCAL_IMAGE_NAME }}:${{ env.LOCAL_IMAGE_TAG }}"
-          CONTAINER_ID=$(buildah from "$IMAGE_REF")
-          MOUNT_POINT=$(buildah mount "$CONTAINER_ID")
+            IMAGE_REF="${{ env.LOCAL_IMAGE_NAME }}:${{ env.LOCAL_IMAGE_TAG }}"
+            CONTAINER_ID=$(buildah from "$IMAGE_REF")
+            MOUNT_POINT=$(buildah mount "$CONTAINER_ID")
 
-          mkdir -p extracted/vector_db
-          cp -a "$MOUNT_POINT"/rag/vector_db/. extracted/vector_db/
+            mkdir -p extracted/vector_db
+            cp -a "$MOUNT_POINT"/rag/vector_db/. extracted/vector_db/
 
-          buildah unmount "$CONTAINER_ID"
-          buildah rm "$CONTAINER_ID"
+            buildah unmount "$CONTAINER_ID"
+            buildah rm "$CONTAINER_ID"
+          '
       - name: Upload extracted vector DB artifact
         uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4
         with:
