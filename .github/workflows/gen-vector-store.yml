@@ -1,0 +1,162 @@
+#
+#
+# Copyright Red Hat
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+name: Generate and PR Vector Store
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "The version of RHDH documentation you want to build for. E.g. ('1.8')."
+        required: true
+      llama_stack_version:
+        description: "Llama stack version key from versions.json (e.g. '0.4.3' or 'latest' for experimental)."
+        required: true
+
+env:
+  TARGET_REPOSITORY: ${{ vars.VECTOR_STORE_TARGET_REPOSITORY || 'Jdubrick/vector-stores' }}
+  TARGET_BASE_BRANCH: ${{ vars.VECTOR_STORE_TARGET_BASE_BRANCH || 'main' }}
+  CONTAINER_FILE: Containerfile.vs
+  LOCAL_IMAGE_NAME: vector-store
+  LOCAL_IMAGE_TAG: latest
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      base_image: ${{ steps.resolve.outputs.base_image }}
+      target_repo: ${{ steps.resolve.outputs.target_repo }}
+      target_branch: ${{ steps.resolve.outputs.target_branch }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Resolve base image and target settings
+        id: resolve
+        run: |
+          LLAMA_VERSION="${{ inputs.llama_stack_version }}"
+          BASE_IMAGE=$(./scripts/resolve-base-image.sh "$LLAMA_VERSION" "cpu")
+
+          echo "base_image=${BASE_IMAGE}" >> "$GITHUB_OUTPUT"
+          echo "target_repo=${{ env.TARGET_REPOSITORY }}" >> "$GITHUB_OUTPUT"
+          echo "target_branch=${{ env.TARGET_BASE_BRANCH }}" >> "$GITHUB_OUTPUT"
+
+          echo "Resolved base image: ${BASE_IMAGE}"
+          echo "Target repository: ${{ env.TARGET_REPOSITORY }}"
+          echo "Target branch: ${{ env.TARGET_BASE_BRANCH }}"
+
+  generate:
+    needs: setup
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Install buildah and rsync
+        run: |
+          sudo apt update
+          sudo apt install -y buildah rsync
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Build vector-store image with Buildah (amd64 only)
+        uses: redhat-actions/buildah-build@7a95fa7ee0f02d552a32753e7414641a04307056 # v2.13
+        with:
+          layers: true
+          image: ${{ env.LOCAL_IMAGE_NAME }}
+          tags: ${{ env.LOCAL_IMAGE_TAG }}
+          containerfiles: ${{ env.CONTAINER_FILE }}
+          archs: amd64
+          oci: true
+          build-args: |
+            RHDH_DOCS_VERSION=${{ inputs.version }}
+            BASE_IMAGE=${{ needs.setup.outputs.base_image }}
+      - name: Extract vector DB from built image
+        run: |
+          set -euo pipefail
+
+          IMAGE_REF="${{ env.LOCAL_IMAGE_NAME }}:${{ env.LOCAL_IMAGE_TAG }}"
+          CONTAINER_ID=$(buildah from "$IMAGE_REF")
+          MOUNT_POINT=$(buildah mount "$CONTAINER_ID")
+
+          mkdir -p extracted/vector_db
+          cp -a "$MOUNT_POINT"/rag/vector_db/. extracted/vector_db/
+
+          buildah unmount "$CONTAINER_ID"
+          buildah rm "$CONTAINER_ID"
+      - name: Upload extracted vector DB artifact
+        uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4
+        with:
+          name: vector-db
+          path: extracted/vector_db
+          if-no-files-found: error
+
+  open-pr:
+    needs: [setup, generate]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Install GitHub CLI
+        run: |
+          sudo apt update
+          sudo apt install -y gh rsync
+      - name: Download vector DB artifact
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4
+        with:
+          name: vector-db
+          path: vector-db
+      - name: Checkout target repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: ${{ needs.setup.outputs.target_repo }}
+          ref: ${{ needs.setup.outputs.target_branch }}
+          token: ${{ secrets.TARGET_REPO_TOKEN }}
+          path: target-repo
+          fetch-depth: 0
+      - name: Sync vector DB files
+        run: |
+          set -euo pipefail
+          VERSIONED_DESTINATION="${{ inputs.llama_stack_version }}"
+          mkdir -p "target-repo/${VERSIONED_DESTINATION}"
+          rsync -a --delete vector-db/ "target-repo/${VERSIONED_DESTINATION}/"
+      - name: Commit and create pull request
+        id: create_pr
+        env:
+          GH_TOKEN: ${{ secrets.TARGET_REPO_TOKEN }}
+        run: |
+          set -euo pipefail
+          cd target-repo
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          BRANCH_NAME="bot/vector-db-${{ inputs.version }}-lls-${{ inputs.llama_stack_version }}-${{ github.run_id }}"
+          PR_TITLE="Update vector_db for RHDH ${{ inputs.version }} (LLS ${{ inputs.llama_stack_version }})"
+          VERSIONED_DESTINATION="${{ inputs.llama_stack_version }}"
+
+          git checkout -b "$BRANCH_NAME"
+          git add "$VERSIONED_DESTINATION"
+
+          git commit -m "$PR_TITLE"
+          git push --set-upstream origin "$BRANCH_NAME"
+
+          PR_URL=$(gh pr create \
+            --repo "${{ needs.setup.outputs.target_repo }}" \
+            --base "${{ needs.setup.outputs.target_branch }}" \
+            --head "$BRANCH_NAME" \
+            --title "$PR_TITLE" \
+            --body "Automated vector DB update from https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}")
+
+          echo "pr_url=${PR_URL}" >> "$GITHUB_OUTPUT"
+      - name: Print PR URL
+        run: |
+          echo "Created PR: ${{ steps.create_pr.outputs.pr_url }}"
