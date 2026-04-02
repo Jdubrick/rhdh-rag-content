@@ -13,7 +13,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-name: Generate and PR Vector Store
+name: Generate and Release RAG Assets
 
 on:
   workflow_dispatch:
@@ -26,11 +26,12 @@ on:
         required: true
 
 env:
-  TARGET_REPOSITORY: ${{ vars.VECTOR_STORE_TARGET_REPOSITORY || 'redhat-ai-dev/rhdh-vector-stores' }}
-  TARGET_BASE_BRANCH: ${{ vars.VECTOR_STORE_TARGET_BASE_BRANCH || 'main' }}
   CONTAINER_FILE: Containerfile.vs
   LOCAL_IMAGE_NAME: vector-store
   LOCAL_IMAGE_TAG: latest
+
+permissions:
+  contents: write
 
 jobs:
   setup:
@@ -38,34 +39,46 @@ jobs:
     timeout-minutes: 5
     outputs:
       base_image: ${{ steps.resolve.outputs.base_image }}
-      target_repo: ${{ steps.resolve.outputs.target_repo }}
-      target_branch: ${{ steps.resolve.outputs.target_branch }}
+      release_tag: ${{ steps.resolve.outputs.release_tag }}
+      release_name: ${{ steps.resolve.outputs.release_name }}
+      asset_name: ${{ steps.resolve.outputs.asset_name }}
     steps:
       - name: Checkout code
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - name: Resolve base image and target settings
+      - name: Resolve base image and release metadata
         id: resolve
         run: |
           LLAMA_VERSION="${{ inputs.llama_stack_version }}"
           BASE_IMAGE=$(./scripts/resolve-base-image.sh "$LLAMA_VERSION" "cpu")
 
+          if [ "$LLAMA_VERSION" == "latest" ]; then
+            TAG_SUFFIX="experimental"
+          else
+            TAG_SUFFIX="$LLAMA_VERSION"
+          fi
+
+          RELEASE_TAG="rag-assets-rhdh-${{ inputs.version }}-lls-${TAG_SUFFIX}"
+          RELEASE_NAME="RAG assets for RHDH ${{ inputs.version }} (LLS ${LLAMA_VERSION})"
+          ASSET_NAME="${RELEASE_TAG}.tar.gz"
+
           echo "base_image=${BASE_IMAGE}" >> "$GITHUB_OUTPUT"
-          echo "target_repo=${{ env.TARGET_REPOSITORY }}" >> "$GITHUB_OUTPUT"
-          echo "target_branch=${{ env.TARGET_BASE_BRANCH }}" >> "$GITHUB_OUTPUT"
+          echo "release_tag=${RELEASE_TAG}" >> "$GITHUB_OUTPUT"
+          echo "release_name=${RELEASE_NAME}" >> "$GITHUB_OUTPUT"
+          echo "asset_name=${ASSET_NAME}" >> "$GITHUB_OUTPUT"
 
           echo "Resolved base image: ${BASE_IMAGE}"
-          echo "Target repository: ${{ env.TARGET_REPOSITORY }}"
-          echo "Target branch: ${{ env.TARGET_BASE_BRANCH }}"
+          echo "Release tag: ${RELEASE_TAG}"
+          echo "Release asset name: ${ASSET_NAME}"
 
   generate:
     needs: setup
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
-      - name: Install buildah and rsync
+      - name: Install buildah
         run: |
           sudo apt update
-          sudo apt install -y buildah rsync
+          sudo apt install -y buildah
       - name: Checkout code
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Build vector-store image with Buildah (amd64 only)
@@ -80,54 +93,57 @@ jobs:
           build-args: |
             RHDH_DOCS_VERSION=${{ inputs.version }}
             BASE_IMAGE=${{ needs.setup.outputs.base_image }}
-      - name: Extract vector DB from built image
+      - name: Extract RAG assets from built image
         run: |
           buildah unshare -- bash ./scripts/extract-vector-db.sh \
             "${{ env.LOCAL_IMAGE_NAME }}:${{ env.LOCAL_IMAGE_TAG }}" \
-            "extracted/vector_db"
-      - name: Upload extracted vector DB artifact
+            "extracted/rag-assets"
+      - name: Package RAG assets archive
+        run: |
+          test -d extracted/rag-assets/vector_db
+          test -d extracted/rag-assets/embeddings_model
+          mkdir -p dist
+          tar -C extracted/rag-assets -czf "dist/${{ needs.setup.outputs.asset_name }}" vector_db embeddings_model
+      - name: Upload packaged RAG assets artifact
         uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4
         with:
-          name: vector-db
-          path: extracted/vector_db
+          name: rag-assets-release
+          path: dist/${{ needs.setup.outputs.asset_name }}
           if-no-files-found: error
 
-  open-pr:
+  publish-release:
     needs: [setup, generate]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    permissions:
+      contents: write
     steps:
       - name: Install GitHub CLI
         run: |
           sudo apt update
-          sudo apt install -y gh rsync
-      - name: Download vector DB artifact
+          sudo apt install -y gh
+      - name: Download packaged RAG assets artifact
         uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4
         with:
-          name: vector-db
-          path: vector-db
-      - name: Checkout source code
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-        with:
-          path: source-repo
-      - name: Checkout target repository
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-        with:
-          repository: ${{ needs.setup.outputs.target_repo }}
-          ref: ${{ needs.setup.outputs.target_branch }}
-          token: ${{ secrets.TARGET_REPO_TOKEN }}
-          path: target-repo
-          fetch-depth: 0
-      - name: Sync vector DB and open pull request
+          name: rag-assets-release
+          path: release-asset
+      - name: Create or update GitHub release
         env:
-          GH_TOKEN: ${{ secrets.TARGET_REPO_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          ./source-repo/scripts/open-vector-store-pr.sh \
-            "${{ inputs.llama_stack_version }}" \
-            "${{ inputs.version }}" \
-            "${{ needs.setup.outputs.target_repo }}" \
-            "${{ needs.setup.outputs.target_branch }}" \
-            "${{ github.run_id }}" \
-            "${{ github.repository }}" \
-            "vector-db" \
-            "target-repo"
+          RELEASE_TAG="${{ needs.setup.outputs.release_tag }}"
+          RELEASE_NAME="${{ needs.setup.outputs.release_name }}"
+          RELEASE_ASSET="release-asset/${{ needs.setup.outputs.asset_name }}"
+
+          test -f "$RELEASE_ASSET"
+
+          if gh release view "$RELEASE_TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "$RELEASE_ASSET" \
+              --repo "${{ github.repository }}" \
+              --clobber
+          else
+            gh release create "$RELEASE_TAG" "$RELEASE_ASSET" \
+              --repo "${{ github.repository }}" \
+              --title "$RELEASE_NAME" \
+              --notes "Automated RAG assets release for RHDH ${{ inputs.version }} and Llama Stack ${{ inputs.llama_stack_version }}."
+          fi
