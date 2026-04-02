@@ -12,7 +12,6 @@ OWNERS
 src
 tests
 scripts/resolve-base-image.sh
-scripts/open-vector-store-pr.sh
 scripts/extract-vector-db.sh
 
 # Generated files, dont copy from local path during build

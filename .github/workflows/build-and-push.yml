@@ -18,12 +18,14 @@ name: Build and Push RAG Container
 on:
   workflow_dispatch:
     inputs:
-      version:
-        description: "The version of RHDH documentation you want to build for. E.g. ('1.8')."
-        required: true
-      llama_stack_version:
-        description: "Llama stack version key from versions.json (e.g. '0.4.3' or 'latest' for experimental)."
-        required: true
+      artifact_release_tag:
+        description: "Release tag containing RAG assets (defaults to triggering release tag for release events)."
+        required: false
+      image_tag:
+        description: "Optional image tag override."
+        required: false
+  release:
+    types: [published]
 
 env:
   IMAGE_NAME: rag-content
@@ -36,31 +38,50 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
-      base_image: ${{ steps.resolve.outputs.base_image }}
+      release_tag: ${{ steps.resolve.outputs.release_tag }}
+      asset_url: ${{ steps.resolve.outputs.asset_url }}
       latest_tag: ${{ steps.resolve.outputs.latest_tag }}
     steps:
       - name: Checkout code
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 #v4
-      - name: Resolve base image and tag
+      - name: Resolve asset release and image tags
         id: resolve
         run: |
-          LLAMA_VERSION="${{ inputs.llama_stack_version }}"
-
-          BASE_IMAGE=$(./scripts/resolve-base-image.sh "$LLAMA_VERSION" "cpu")
-
-          # Map 'latest' to 'experimental' for the image tag suffix
-          if [ "$LLAMA_VERSION" == "latest" ]; then
-            TAG_SUFFIX="experimental"
+          if [ "${{ github.event_name }}" = "release" ]; then
+            RELEASE_TAG="${{ github.event.release.tag_name }}"
           else
-            TAG_SUFFIX="$LLAMA_VERSION"
+            RELEASE_TAG="${{ inputs.artifact_release_tag }}"
           fi
 
-          LATEST_TAG="release-${{ inputs.version }}-lls-${TAG_SUFFIX}"
+          if [ -z "$RELEASE_TAG" ]; then
+            echo "artifact_release_tag is required for manual workflow_dispatch runs" >&2
+            exit 1
+          fi
 
-          echo "base_image=${BASE_IMAGE}" >> $GITHUB_OUTPUT
+          # Expected release tag format:
+          # rag-assets-rhdh-<docs_version>-lls-<llama_tag_suffix>
+          if [[ "$RELEASE_TAG" =~ ^rag-assets-rhdh-(.+)-lls-(.+)$ ]]; then
+            RHDH_VERSION="${BASH_REMATCH[1]}"
+            TAG_SUFFIX="${BASH_REMATCH[2]}"
+          else
+            echo "Unsupported release tag format: $RELEASE_TAG" >&2
+            echo "Expected: rag-assets-rhdh-<docs_version>-lls-<llama_suffix>" >&2
+            exit 1
+          fi
+
+          if [ -n "${{ inputs.image_tag }}" ]; then
+            LATEST_TAG="${{ inputs.image_tag }}"
+          else
+            LATEST_TAG="release-${RHDH_VERSION}-lls-${TAG_SUFFIX}"
+          fi
+          ASSET_URL="https://github.com/${{ github.repository }}/releases/download/${RELEASE_TAG}/${RELEASE_TAG}.tar.gz"
+
+          echo "release_tag=${RELEASE_TAG}" >> $GITHUB_OUTPUT
+          echo "asset_url=${ASSET_URL}" >> $GITHUB_OUTPUT
           echo "latest_tag=${LATEST_TAG}" >> $GITHUB_OUTPUT
 
-          echo "Resolved base image: ${BASE_IMAGE}"
+          echo "Resolved release tag: ${RELEASE_TAG}"
+          echo "Resolved asset URL: ${ASSET_URL}"
           echo "Image tag: ${LATEST_TAG}"
 
   build:
@@ -80,6 +101,7 @@ jobs:
       - name: Set tag from setup
         run: |
           echo "LATEST_TAG=${{ needs.setup.outputs.latest_tag }}" >> $GITHUB_ENV
+          echo "RAG_ASSET_URL=${{ needs.setup.outputs.asset_url }}" >> $GITHUB_ENV
       - name: Install buildah
         run: |
           sudo apt update
@@ -99,9 +121,7 @@ jobs:
           archs: ${{ matrix.arch }}
           oci: true
           build-args: |
-            RHDH_DOCS_VERSION=${{ inputs.version }}
-            BASE_IMAGE=${{ needs.setup.outputs.base_image }}
-            LLAMA_STACK_VERSION=${{ inputs.llama_stack_version }}
+            RAG_ASSETS_URL=${{ env.RAG_ASSET_URL }}
       - name: Check images
         run: |
           buildah images | grep '${{ env.IMAGE_NAME }}'

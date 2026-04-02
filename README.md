@@ -12,15 +12,15 @@ This repository produces Red Hat Developer Hub (RHDH) Lightspeed RAG content con
 
 The container images are published to [redhat-ai-dev/rag-content](https://quay.io/repository/redhat-ai-dev/rag-content?tab=tags) on Quay.io.
 
-Pre-generated vector stores are stored in a separate repository: [`redhat-ai-dev/rhdh-vector-stores`](https://github.com/redhat-ai-dev/rhdh-vector-stores).
+Pre-generated RAG assets (vector store + embeddings model) are published as GitHub Release artifacts in this repository.
 
 ## CI Workflows
 
-There are two GitHub Actions workflows, both triggered manually via `workflow_dispatch`.
+There are two GitHub Actions workflows.
 
-### 1. Generate and PR Vector Store (`gen-vector-store.yml`)
+### 1. Generate and Release RAG Assets (`gen-vector-store.yml`)
 
-Generates a vector store from RHDH documentation and opens a pull request to the [vector-stores repository](https://github.com/redhat-ai-dev/rhdh-vector-stores) with the result.
+Generates RAG assets from RHDH documentation and publishes them as a GitHub Release asset.
 
 #### Inputs
 
@@ -33,13 +33,15 @@ Generates a vector store from RHDH documentation and opens a pull request to the
 
 1. Resolves the upstream base image from `versions.json` for the given `llama_stack_version`.
 2. Builds `Containerfile.vs` which generates embeddings and the vector database inside the container.
-3. Extracts the `/rag/vector_db` directory from the built image.
-4. Clones the vector-stores repository, places the extracted content under `<llama_stack_version>/vector_db/`, and opens a PR.
+3. Extracts both `/rag/vector_db` and `/rag/embeddings_model` from the built image.
+4. Packages them into `rag-assets-rhdh-<version>-lls-<llama_suffix>.tar.gz`.
+5. Creates or updates a GitHub Release with the packaged asset.
 
-The resulting PR places files in the vector-stores repo at:
+The packaged release asset contains:
 
 ```
-<llama_stack_version>/vector_db/rhdh_product_docs/<RHDH_DOCS_VERSION>/
+vector_db/rhdh_product_docs/<RHDH_DOCS_VERSION>/
+embeddings_model/
 ```
 
 ### 2. Build and Push RAG Container (`build-and-push.yml`)
@@ -47,23 +49,22 @@ The resulting PR places files in the vector-stores repo at:
 Builds the final multi-arch container image and pushes it to Quay.io.
 
 > [!IMPORTANT]
-> The vector store for the target `llama_stack_version` and `version` must already exist in the [vector-stores repository](https://github.com/redhat-ai-dev/rhdh-vector-stores). If it does not, run the **Generate and PR Vector Store** workflow first and merge the resulting PR before building.
+> This workflow triggers automatically when a RAG asset release is **first published**. If you re-run **Generate and Release RAG Assets** for an existing release tag (e.g. to regenerate assets for the same version), the release is updated in-place and the auto-trigger does **not** fire again. In that case, trigger this workflow manually using `artifact_release_tag`.
 
 #### Inputs
 
 | Input | Type | Required | Description |
 |-------|------|----------|-------------|
-| `version` | string | yes | RHDH documentation version, e.g. `1.9` |
-| `llama_stack_version` | string | yes | Llama stack version key from `versions.json`, e.g. `0.4.3` or `latest` |
+| `artifact_release_tag` | string | no | Release tag containing assets, required for manual `workflow_dispatch` |
+| `image_tag` | string | no | Optional explicit image tag override |
 
 #### How It Works
 
-1. Resolves the upstream CPU base image from `versions.json` for the given `llama_stack_version`.
-2. Builds `Containerfile` which clones the vector-stores repo at `main` (or a configurable ref for release builds), validates that the expected vector store directory exists, and copies the vector DB and embeddings model into a minimal UBI image.
-3. Pushes architecture-specific images (amd64 + arm64) to Quay.io.
-4. Creates and pushes multi-arch manifests.
-
-The build will **fail** if the vector store for the requested `llama_stack_version` and `version` is not present in the vector-stores repo.
+1. Resolves the release tag from the triggering release event (or the manual `artifact_release_tag` input).
+2. Derives image tags from release metadata.
+3. Builds `Containerfile`, which downloads and extracts the public release asset using a build arg URL.
+4. Pushes architecture-specific images (amd64 + arm64) to Quay.io.
+5. Creates and pushes multi-arch manifests.
 
 ### Image Tags
 
@@ -136,14 +137,14 @@ To add support for a new llama stack version:
 }
 ```
 
-2. Run the **Generate and PR Vector Store** workflow with the new `llama_stack_version` and desired `version`. Merge the resulting PR in the vector-stores repo.
-3. Run the **Build and Push RAG Container** workflow with `llama_stack_version` set to `0.5.0`.
+2. Run the **Generate and Release RAG Assets** workflow with the new `llama_stack_version` and desired `version`.
+3. The **Build and Push RAG Container** workflow runs automatically after release publication.
 
 ## Release Strategy
 
 - **Future release branches** (cut from `main`) carry their own copy of `versions.json` pinned to the llama stack versions validated for that release.
 - **Existing release branches** (pre-refactor) retain the old workflow and are unaffected.
-- **Cutting a new release**: branch from `main`, review `versions.json`, and lock it to only the versions that are known-good for that release (i.e., remove `latest` if desired). For the `Containerfile`, update `VECTOR_STORE_REF` to point to the appropriate release branch or tag in the vector-stores repo.
+- **Cutting a new release**: branch from `main`, review `versions.json`, and lock it to only the versions that are known-good for that release (i.e., remove `latest` if desired).
 - **Rebuilding a historic image**: navigate to the release branch in GitHub and trigger the workflow. The workflow reads the branch's own `versions.json`, ensuring the correct upstream image digests are used.
 
 ## Local Development

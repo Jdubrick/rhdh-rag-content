@@ -19,7 +19,7 @@ set -euo pipefail
 if [ "$#" -ne 2 ]; then
     echo "Usage: $0 <image_ref> <output_dir>" >&2
     echo "  image_ref   Local image reference (e.g. vector-store:latest)" >&2
-    echo "  output_dir  Destination directory for extracted vector DB" >&2
+    echo "  output_dir  Destination directory for extracted RAG assets" >&2
     exit 1
 fi
 
@@ -42,5 +42,20 @@ trap cleanup EXIT
 CONTAINER_ID=$(buildah from "$IMAGE_REF")
 MOUNT_POINT=$(buildah mount "$CONTAINER_ID")
 
-mkdir -p "$OUTPUT_DIR"
-cp -a "$MOUNT_POINT"/rag/vector_db/. "$OUTPUT_DIR"/
+VECTOR_DB_SOURCE="${MOUNT_POINT}/rag/vector_db"
+EMBEDDING_MODEL_SOURCE="${MOUNT_POINT}/rag/embeddings_model"
+
+if [ ! -d "$VECTOR_DB_SOURCE" ]; then
+    echo "Missing vector DB directory in image at '$VECTOR_DB_SOURCE'" >&2
+    exit 1
+fi
+
+if [ ! -d "$EMBEDDING_MODEL_SOURCE" ]; then
+    echo "Missing embeddings model directory in image at '$EMBEDDING_MODEL_SOURCE'" >&2
+    exit 1
+fi
+
+mkdir -p "${OUTPUT_DIR}/vector_db"
+mkdir -p "${OUTPUT_DIR}/embeddings_model"
+cp -a "${VECTOR_DB_SOURCE}/." "${OUTPUT_DIR}/vector_db/"
+cp -a "${EMBEDDING_MODEL_SOURCE}/." "${OUTPUT_DIR}/embeddings_model/"
