@@ -34,7 +34,7 @@ git clone --single-branch --branch release-${RHDH_VERSION} https://github.com/re
 
 RELEASE_NOTES_REPO="https://github.com/redhat-ai-dev/release-notes-mirror.git"
 if [ -n "$GITHUB_PAT" ]; then
-    RELEASE_NOTES_REPO="https://${GITHUB_PAT}@github.com/redhat-ai-dev/release-notes-mirror.git"
+    RELEASE_NOTES_REPO="https://x-access-token:${GITHUB_PAT}@github.com/redhat-ai-dev/release-notes-mirror.git"
 fi
 git clone --single-branch --branch release-${RHDH_VERSION} "$RELEASE_NOTES_REPO"
 
